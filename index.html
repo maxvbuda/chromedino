@@ -44,63 +44,8 @@ let invertTimer = 0;
 const INVERT_DISTANCE = 700;
 const INVERT_DURATION_FRAMES = 700;
 
-// ---------- dino sprite (own pixel-art, unit grid rectangles [x,y,w,h]) ----------
-// bounding box: 26w x 26h units -> 52x52px, close to the real 44x47px silhouette
-// split into a static lower body and a head/neck unit that bobs slightly while running
-const DINO_BODY_LOWER = [
-  [0,19,3,2],    // tail tip
-  [1,17,4,3],    // tail mid 2
-  [4,15,4,3],    // tail mid 1
-  [7,13,3,3],    // tail base, meets torso
-  [6,11,13,8],   // torso
-  [8,9,9,2],     // rounded shoulder step
-  [12,18,2,2],   // upper arm
-  [10,19,2,1],   // claw tip
-];
-const DINO_HEAD = [
-  [14,7,3,4],    // lower neck
-  [16,4,5,5],    // upper neck
-  [18,0,5,2],    // head crown
-  [16,2,8,3],    // head main
-  [23,4,3,2],    // snout
-];
-const DINO_HEAD_NOTCH = [22,5,3,1]; // mouth (cut to bg)
-const DINO_EYE = [18,1,1,1];
-const DINO_LEGS_A = [ [5,19,4,4], [15,19,4,7], [14,25,6,1] ];
-const DINO_LEGS_B = [ [5,19,4,7], [4,25,6,1], [15,19,4,4] ];
-const DINO_W = 26 * UNIT, DINO_H = 26 * UNIT;
-
-const DINO_DUCK_BODY = [
-  [0,9,3,3],       // tail
-  [2,6,24,6],      // long low torso
-  [24,2,7,6],      // lowered head
-];
-const DINO_DUCK_EYE = [28,4,1,1];
-const DINO_DUCK_LEGS_A = [ [4,11,3,2], [16,10,3,3] ];
-const DINO_DUCK_LEGS_B = [ [4,10,3,3], [16,11,3,2] ];
-const DINO_DUCK_W = 32 * UNIT, DINO_DUCK_H = 13 * UNIT;
-
-// obstacle templates (unit grid) -- saguaro-style arms, sprouting lower on the
-// stem and curving upward, closer to a real saguaro's silhouette
-const CACTUS_SMALL = {
-  rects: [ [2,0,2,16], [0,3,2,6], [0,9,2,1], [4,6,2,6], [4,12,2,1] ],
-  w: 6, h: 16,
-};
-const CACTUS_LARGE = {
-  rects: [ [2,0,2,22], [0,5,2,7], [0,12,2,1], [4,11,2,7], [4,18,2,1] ],
-  w: 6, h: 22,
-};
-function cactusGroup(n) {
-  const rects = [];
-  let offset = 0;
-  const t = Math.random() < 0.5 ? CACTUS_LARGE : CACTUS_SMALL;
-  for (let i = 0; i < n; i++) {
-    for (const [x,y,w,h] of t.rects) rects.push([x + offset, y, w, h]);
-    offset += t.w + 2;
-  }
-  return { rects, w: (offset - 2) * UNIT, h: t.h * UNIT };
-}
-
+// ---------- dino: sprite sheet (own art), chroma-keyed and sliced at runtime ----------
+// bird stays hand-drawn (unit grid rectangles) -- no bird art was supplied
 const BIRD_A = [ [7,5,5,3],[11,4,3,2],[14,5,2,1],[0,2,7,3],[12,2,6,3],[4,8,2,2],[7,8,2,2] ];
 const BIRD_B = [ [7,5,5,3],[11,4,3,2],[14,5,2,1],[0,7,7,3],[12,7,6,3],[4,8,2,2],[7,8,2,2] ];
 const BIRD_W = 18 * UNIT, BIRD_H = 11 * UNIT;
@@ -109,6 +54,66 @@ function drawUnits(rects, ox, oy, color) {
   ctx.fillStyle = color;
   for (const [x,y,w,h] of rects) ctx.fillRect(ox + x * UNIT, oy + y * UNIT, w * UNIT, h * UNIT);
 }
+
+// ---------- sprite sheet loading: chroma-key the magenta background out,
+// then trim each grid cell to its actual content so frames sit flush ----------
+function chromaKeyCanvas(img) {
+  const off = document.createElement('canvas');
+  off.width = img.naturalWidth; off.height = img.naturalHeight;
+  const octx = off.getContext('2d');
+  octx.drawImage(img, 0, 0);
+  const id = octx.getImageData(0, 0, off.width, off.height);
+  const d = id.data;
+  const kr = d[0], kg = d[1], kb = d[2];
+  const tol = 60;
+  for (let i = 0; i < d.length; i += 4) {
+    if (Math.abs(d[i] - kr) < tol && Math.abs(d[i+1] - kg) < tol && Math.abs(d[i+2] - kb) < tol) d[i+3] = 0;
+  }
+  octx.putImageData(id, 0, 0);
+  return off;
+}
+function sliceFrames(sheetCanvas, cols, rows) {
+  const cellW = sheetCanvas.width / cols, cellH = sheetCanvas.height / rows;
+  const sctx = sheetCanvas.getContext('2d');
+  const frames = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const rx = Math.floor(c * cellW), ry = Math.floor(r * cellH);
+      const rw = Math.ceil(cellW), rh = Math.ceil(cellH);
+      const id = sctx.getImageData(rx, ry, rw, rh);
+      const d = id.data;
+      let minX = rw, minY = rh, maxX = -1, maxY = -1;
+      for (let y = 0; y < rh; y++) for (let x = 0; x < rw; x++) {
+        if (d[(y * rw + x) * 4 + 3] > 10) {
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+        }
+      }
+      if (maxX < 0) { frames.push(null); continue; }
+      const fw = maxX - minX + 1, fh = maxY - minY + 1;
+      const fc = document.createElement('canvas');
+      fc.width = fw; fc.height = fh;
+      fc.getContext('2d').drawImage(sheetCanvas, rx + minX, ry + minY, fw, fh, 0, 0, fw, fh);
+      frames.push(fc);
+    }
+  }
+  return frames;
+}
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+let raptorFrames = null, cactusFrames = null, assetsReady = false;
+const RUN_FRAMES = [0, 1, 2, 4, 5, 6]; // 8-frame sheet minus the jump pose (3) and game-over pose (7)
+const RAPTOR_IDLE = 0, RAPTOR_JUMP = 3, RAPTOR_GAMEOVER = 7;
+const DINO_TARGET_H = 50;
+const DINO_COLLISION_W = 60, DINO_COLLISION_H = 46;
+const DINO_DUCK_COLLISION_W = 66, DINO_DUCK_COLLISION_H = 26;
 
 // ---------- physics (matched to the real game's feel; numbers are unprotectable facts) ----------
 const GRAVITY = 0.6;
@@ -131,7 +136,7 @@ let cloudList = [];
 
 const dino = { x: 30, y: 0, vy: 0, ducking: false, speedDrop: false, legFrame: 0 };
 
-function dinoDims(ducking) { return ducking ? [DINO_DUCK_W, DINO_DUCK_H] : [DINO_W, DINO_H]; }
+function dinoDims(ducking) { return ducking ? [DINO_DUCK_COLLISION_W, DINO_DUCK_COLLISION_H] : [DINO_COLLISION_W, DINO_COLLISION_H]; }
 function dinoTopY(ducking) { const [, h] = dinoDims(ducking); return GROUND_Y - h; }
 function resetDino() {
   dino.y = dinoTopY(false);
@@ -150,6 +155,18 @@ function scheduleNextObstacle() {
   const tighten = (speed - SPEED_START) * 1.5;
   nextObstacleFrame = frame + Math.max(50, base - tighten);
 }
+function pushCactus(x) {
+  const idx = Math.floor(Math.random() * cactusFrames.length);
+  const spr = cactusFrames[idx];
+  if (!spr) return null;
+  const targetH = 34 + Math.random() * 20; // 34-54px: small-to-large variety
+  const maxW = 30; // some variants (round barrel, prickly-pear cluster) are wider than tall
+  const scale = Math.min(targetH / spr.height, maxW / spr.width);
+  const w = spr.width * scale, h = spr.height * scale;
+  const o = { type: 'cactus', x, frameIdx: idx, w, h };
+  obstacles.push(o);
+  return o;
+}
 function spawnObstacle() {
   const canBird = score > 200;
   if (canBird && Math.random() < 0.35) {
@@ -157,9 +174,8 @@ function spawnObstacle() {
     const y = lanes[Math.floor(Math.random() * lanes.length)];
     obstacles.push({ type: 'bird', x: W + 10, y, wing: 0 });
   } else {
-    const n = 1 + (Math.random() < 0.3 ? 1 : 0) + (Math.random() < 0.12 ? 1 : 0);
-    const g = cactusGroup(n);
-    obstacles.push({ type: 'cactus', x: W + 10, rects: g.rects, w: g.w, h: g.h });
+    const first = pushCactus(W + 10);
+    if (first && Math.random() < 0.2) pushCactus(first.x + first.w + 2);
   }
 }
 
@@ -386,34 +402,36 @@ function drawGround(color) {
   }
 }
 
-function drawDino(color, bg) {
+function drawDino() {
+  if (!assetsReady) return;
   const ducking = dino.ducking;
+  const [cw, ch] = dinoDims(ducking);
   const onGround = dino.y >= dinoTopY(ducking) - 1;
-  const legPhase = Math.floor(dino.legFrame / 7) % 2 === 0;
-  const bobbing = running && onGround && !gameOver && !ducking;
-  const headOy = dino.y + (bobbing && !legPhase ? UNIT : 0);
 
-  if (!ducking) {
-    drawUnits(DINO_BODY_LOWER, dino.x, dino.y, color);
-    drawUnits(DINO_HEAD, dino.x, headOy, color);
-    drawUnits([DINO_HEAD_NOTCH], dino.x, headOy, bg);
-    drawUnits([DINO_EYE], dino.x, headOy, gameOver ? color : bg);
-  } else {
-    drawUnits(DINO_DUCK_BODY, dino.x, dino.y, color);
-    drawUnits([DINO_DUCK_EYE], dino.x, dino.y, gameOver ? color : bg);
-  }
-  if (!running && !gameOver) return;
-  const legs = ducking
-    ? (legPhase ? DINO_DUCK_LEGS_A : DINO_DUCK_LEGS_B)
-    : (legPhase ? DINO_LEGS_A : DINO_LEGS_B);
-  if (onGround) drawUnits(legs, dino.x, dino.y, color);
-  else drawUnits(ducking ? DINO_DUCK_LEGS_A : DINO_LEGS_A, dino.x, dino.y, color);
+  let frameIdx;
+  if (gameOver) frameIdx = RAPTOR_GAMEOVER;
+  else if (!running) frameIdx = RAPTOR_IDLE;
+  else if (!onGround) frameIdx = RAPTOR_JUMP;
+  else frameIdx = RUN_FRAMES[Math.floor(dino.legFrame / 5) % RUN_FRAMES.length];
+
+  const spr = raptorFrames[frameIdx];
+  if (!spr) return;
+  const scale = DINO_TARGET_H / spr.height;
+  const dw = spr.width * scale;
+  const dh = ducking ? spr.height * scale * 0.55 : spr.height * scale;
+  const dx = dino.x + (cw - dw) / 2;
+  const dy = dino.y + (ch - dh);
+  ctx.drawImage(spr, dx, dy, dw, dh);
 }
 
 function drawObstacles(color) {
   for (const o of obstacles) {
-    if (o.type === 'cactus') drawUnits(o.rects, o.x, GROUND_Y - o.h, color);
-    else drawUnits(Math.floor(o.wing / 8) % 2 === 0 ? BIRD_A : BIRD_B, o.x, o.y, color);
+    if (o.type === 'cactus') {
+      const spr = cactusFrames[o.frameIdx];
+      if (spr) ctx.drawImage(spr, o.x, GROUND_Y - o.h, o.w, o.h);
+    } else {
+      drawUnits(Math.floor(o.wing / 8) % 2 === 0 ? BIRD_A : BIRD_B, o.x, o.y, color);
+    }
   }
 }
 
@@ -427,7 +445,7 @@ function draw() {
 
   drawGround(pal.fg);
   drawObstacles(pal.fg);
-  drawDino(pal.fg, pal.bg);
+  drawDino();
 
   if (flashTimer === 0 || Math.floor(flashTimer / 4) % 2 === 0) {
     const hs = String(highScore).padStart(5, '0');
@@ -455,9 +473,15 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
-initGround();
-resetDino();
-loop();
+Promise.all([loadImage('assets/raptor_sheet.png'), loadImage('assets/cactus_sheet.png')])
+  .then(([raptorImg, cactusImg]) => {
+    raptorFrames = sliceFrames(chromaKeyCanvas(raptorImg), 4, 2);
+    cactusFrames = sliceFrames(chromaKeyCanvas(cactusImg), 4, 2);
+    assetsReady = true;
+    initGround();
+    resetDino();
+    loop();
+  });
 </script>
 </body>
 </html>
