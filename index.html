@@ -45,23 +45,30 @@ const INVERT_DISTANCE = 700;
 const INVERT_DURATION_FRAMES = 700;
 
 // ---------- dino sprite (own pixel-art, unit grid rectangles [x,y,w,h]) ----------
-// bounding box: 24w x 26h units -> 48x52px, close to the real 44x47px silhouette
-const DINO_BODY = [
-  [0,18,4,3],    // tail tip
-  [3,15,4,4],    // tail mid
-  [6,12,3,4],    // tail base, meets torso
-  [6,10,13,9],   // torso
-  [9,8,8,2],     // rounded shoulder step
-  [15,4,6,7],    // neck
-  [16,0,8,5],    // head
-  [23,3,2,3],    // snout tip
-  [13,17,2,3],   // arm
+// bounding box: 26w x 26h units -> 52x52px, close to the real 44x47px silhouette
+// split into a static lower body and a head/neck unit that bobs slightly while running
+const DINO_BODY_LOWER = [
+  [0,19,3,2],    // tail tip
+  [1,17,4,3],    // tail mid 2
+  [4,15,4,3],    // tail mid 1
+  [7,13,3,3],    // tail base, meets torso
+  [6,11,13,8],   // torso
+  [8,9,9,2],     // rounded shoulder step
+  [12,18,2,2],   // upper arm
+  [10,19,2,1],   // claw tip
 ];
-const DINO_HEAD_NOTCH = [21,4,3,2]; // mouth (cut to bg)
-const DINO_EYE = [19,1,1,1];
-const DINO_LEGS_A = [ [5,19,4,4], [15,19,4,7] ];
-const DINO_LEGS_B = [ [5,19,4,7], [15,19,4,4] ];
-const DINO_W = 24 * UNIT, DINO_H = 26 * UNIT;
+const DINO_HEAD = [
+  [14,7,3,4],    // lower neck
+  [16,4,5,5],    // upper neck
+  [18,0,5,2],    // head crown
+  [16,2,8,3],    // head main
+  [23,4,3,2],    // snout
+];
+const DINO_HEAD_NOTCH = [22,5,3,1]; // mouth (cut to bg)
+const DINO_EYE = [18,1,1,1];
+const DINO_LEGS_A = [ [5,19,4,4], [15,19,4,7], [14,25,6,1] ];
+const DINO_LEGS_B = [ [5,19,4,7], [4,25,6,1], [15,19,4,4] ];
+const DINO_W = 26 * UNIT, DINO_H = 26 * UNIT;
 
 const DINO_DUCK_BODY = [
   [0,9,3,3],       // tail
@@ -73,13 +80,14 @@ const DINO_DUCK_LEGS_A = [ [4,11,3,2], [16,10,3,3] ];
 const DINO_DUCK_LEGS_B = [ [4,10,3,3], [16,11,3,2] ];
 const DINO_DUCK_W = 32 * UNIT, DINO_DUCK_H = 13 * UNIT;
 
-// obstacle templates (unit grid) -- saguaro-style arms
+// obstacle templates (unit grid) -- saguaro-style arms, sprouting lower on the
+// stem and curving upward, closer to a real saguaro's silhouette
 const CACTUS_SMALL = {
-  rects: [ [2,0,2,16], [0,3,2,4], [0,7,2,1], [4,6,2,4], [4,10,2,1] ],
+  rects: [ [2,0,2,16], [0,3,2,6], [0,9,2,1], [4,6,2,6], [4,12,2,1] ],
   w: 6, h: 16,
 };
 const CACTUS_LARGE = {
-  rects: [ [2,0,2,22], [0,4,2,5], [0,9,2,1], [4,9,2,5], [4,14,2,1] ],
+  rects: [ [2,0,2,22], [0,5,2,7], [0,12,2,1], [4,11,2,7], [4,18,2,1] ],
   w: 6, h: 22,
 };
 function cactusGroup(n) {
@@ -93,9 +101,9 @@ function cactusGroup(n) {
   return { rects, w: (offset - 2) * UNIT, h: t.h * UNIT };
 }
 
-const BIRD_A = [ [6,5,4,3],[9,4,3,2],[12,5,2,1],[0,1,6,3],[10,1,6,3],[3,7,3,2] ];
-const BIRD_B = [ [6,5,4,3],[9,4,3,2],[12,5,2,1],[0,7,6,3],[10,7,6,3],[3,7,3,2] ];
-const BIRD_W = 16 * UNIT, BIRD_H = 10 * UNIT;
+const BIRD_A = [ [7,5,5,3],[11,4,3,2],[14,5,2,1],[0,2,7,3],[12,2,6,3],[4,8,2,2],[7,8,2,2] ];
+const BIRD_B = [ [7,5,5,3],[11,4,3,2],[14,5,2,1],[0,7,7,3],[12,7,6,3],[4,8,2,2],[7,8,2,2] ];
+const BIRD_W = 18 * UNIT, BIRD_H = 11 * UNIT;
 
 function drawUnits(rects, ox, oy, color) {
   ctx.fillStyle = color;
@@ -345,8 +353,10 @@ function drawReplayIcon(cx, cy, color) {
 function drawCloud(x, y, color) {
   ctx.fillStyle = color;
   ctx.globalAlpha = 0.6;
-  ctx.fillRect(x, y, 30, 6);
-  ctx.fillRect(x + 6, y - 4, 18, 6);
+  ctx.fillRect(x + 4, y + 4, 22, 3);
+  ctx.fillRect(x, y + 2, 11, 5);
+  ctx.fillRect(x + 7, y - 2, 15, 6);
+  ctx.fillRect(x + 20, y + 1, 11, 6);
   ctx.globalAlpha = 1;
 }
 function drawMoon(x, y, color) {
@@ -380,11 +390,16 @@ function drawDino(color, bg) {
   const ducking = dino.ducking;
   const onGround = dino.y >= dinoTopY(ducking) - 1;
   const legPhase = Math.floor(dino.legFrame / 7) % 2 === 0;
-  drawUnits(ducking ? DINO_DUCK_BODY : DINO_BODY, dino.x, dino.y, color);
+  const bobbing = running && onGround && !gameOver && !ducking;
+  const headOy = dino.y + (bobbing && !legPhase ? UNIT : 0);
+
   if (!ducking) {
-    drawUnits([DINO_HEAD_NOTCH], dino.x, dino.y, bg);
-    drawUnits([DINO_EYE], dino.x, dino.y, gameOver ? color : bg);
+    drawUnits(DINO_BODY_LOWER, dino.x, dino.y, color);
+    drawUnits(DINO_HEAD, dino.x, headOy, color);
+    drawUnits([DINO_HEAD_NOTCH], dino.x, headOy, bg);
+    drawUnits([DINO_EYE], dino.x, headOy, gameOver ? color : bg);
   } else {
+    drawUnits(DINO_DUCK_BODY, dino.x, dino.y, color);
     drawUnits([DINO_DUCK_EYE], dino.x, dino.y, gameOver ? color : bg);
   }
   if (!running && !gameOver) return;
