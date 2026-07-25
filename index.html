@@ -72,6 +72,55 @@ function chromaKeyCanvas(img) {
   octx.putImageData(id, 0, 0);
   return off;
 }
+// Find every connected blob of non-transparent pixels in a cell and return
+// the biggest one's bounds + membership mask. The sheet's grid isn't pixel-
+// perfect (AI-generated art), so a plain per-cell bounding box sometimes
+// grabs a sliver of the neighboring frame -- keeping only the largest
+// connected component discards that stray fragment instead of just cropping
+// around it.
+function largestComponent(data, w, h) {
+  const visited = new Uint8Array(w * h);
+  const stack = new Int32Array(w * h);
+  let best = null;
+  for (let sy = 0; sy < h; sy++) {
+    for (let sx = 0; sx < w; sx++) {
+      const sidx = sy * w + sx;
+      if (visited[sidx]) continue;
+      if (data[sidx * 4 + 3] <= 10) { visited[sidx] = 1; continue; }
+      let sp = 0;
+      stack[sp++] = sidx; visited[sidx] = 1;
+      let minX = sx, maxX = sx, minY = sy, maxY = sy, count = 0;
+      while (sp > 0) {
+        const idx = stack[--sp];
+        const y = (idx / w) | 0, x = idx - y * w;
+        count++;
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+        if (x > 0) { const n = idx - 1; if (!visited[n] && data[n*4+3] > 10) { visited[n] = 1; stack[sp++] = n; } }
+        if (x < w-1) { const n = idx + 1; if (!visited[n] && data[n*4+3] > 10) { visited[n] = 1; stack[sp++] = n; } }
+        if (y > 0) { const n = idx - w; if (!visited[n] && data[n*4+3] > 10) { visited[n] = 1; stack[sp++] = n; } }
+        if (y < h-1) { const n = idx + w; if (!visited[n] && data[n*4+3] > 10) { visited[n] = 1; stack[sp++] = n; } }
+      }
+      if (!best || count > best.count) best = { seed: sidx, count, minX, minY, maxX, maxY };
+    }
+  }
+  return best;
+}
+function componentMask(data, w, h, seed) {
+  const mask = new Uint8Array(w * h);
+  const stack = new Int32Array(w * h);
+  let sp = 0;
+  stack[sp++] = seed; mask[seed] = 1;
+  while (sp > 0) {
+    const idx = stack[--sp];
+    const y = (idx / w) | 0, x = idx - y * w;
+    if (x > 0) { const n = idx - 1; if (!mask[n] && data[n*4+3] > 10) { mask[n] = 1; stack[sp++] = n; } }
+    if (x < w-1) { const n = idx + 1; if (!mask[n] && data[n*4+3] > 10) { mask[n] = 1; stack[sp++] = n; } }
+    if (y > 0) { const n = idx - w; if (!mask[n] && data[n*4+3] > 10) { mask[n] = 1; stack[sp++] = n; } }
+    if (y < h-1) { const n = idx + w; if (!mask[n] && data[n*4+3] > 10) { mask[n] = 1; stack[sp++] = n; } }
+  }
+  return mask;
+}
 function sliceFrames(sheetCanvas, cols, rows) {
   const cellW = sheetCanvas.width / cols, cellH = sheetCanvas.height / rows;
   const sctx = sheetCanvas.getContext('2d');
@@ -82,18 +131,23 @@ function sliceFrames(sheetCanvas, cols, rows) {
       const rw = Math.ceil(cellW), rh = Math.ceil(cellH);
       const id = sctx.getImageData(rx, ry, rw, rh);
       const d = id.data;
-      let minX = rw, minY = rh, maxX = -1, maxY = -1;
-      for (let y = 0; y < rh; y++) for (let x = 0; x < rw; x++) {
-        if (d[(y * rw + x) * 4 + 3] > 10) {
-          if (x < minX) minX = x; if (x > maxX) maxX = x;
-          if (y < minY) minY = y; if (y > maxY) maxY = y;
+      const comp = largestComponent(d, rw, rh);
+      if (!comp) { frames.push(null); continue; }
+      const mask = componentMask(d, rw, rh, comp.seed);
+      const fw = comp.maxX - comp.minX + 1, fh = comp.maxY - comp.minY + 1;
+      const out = new ImageData(fw, fh);
+      const od = out.data;
+      for (let y = 0; y < fh; y++) {
+        for (let x = 0; x < fw; x++) {
+          const srcIdx = (y + comp.minY) * rw + (x + comp.minX);
+          if (!mask[srcIdx]) continue;
+          const s = srcIdx * 4, o = (y * fw + x) * 4;
+          od[o] = d[s]; od[o+1] = d[s+1]; od[o+2] = d[s+2]; od[o+3] = d[s+3];
         }
       }
-      if (maxX < 0) { frames.push(null); continue; }
-      const fw = maxX - minX + 1, fh = maxY - minY + 1;
       const fc = document.createElement('canvas');
       fc.width = fw; fc.height = fh;
-      fc.getContext('2d').drawImage(sheetCanvas, rx + minX, ry + minY, fw, fh, 0, 0, fw, fh);
+      fc.getContext('2d').putImageData(out, 0, 0);
       frames.push(fc);
     }
   }
